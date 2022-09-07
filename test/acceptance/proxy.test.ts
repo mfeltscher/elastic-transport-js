@@ -26,6 +26,10 @@ import {
   TestClient,
   buildProxy
 } from '../utils'
+import { BaseConnection, HttpConnection, UndiciConnection } from '../../lib/connection'
+import type { Server } from 'http'
+import { Server as HttpsServer } from 'https'
+import type { ProxyServer } from '../utils/buildProxy'
 
 const {
   createProxy,
@@ -34,23 +38,34 @@ const {
   createSecureServer
 } = buildProxy
 
-test('http-http proxy support', async t => {
-  const server = await createServer()
-  const proxy = await createProxy()
+const request = async <TResponse = unknown>(server: Server, proxy: ProxyServer, path: string, connection: typeof BaseConnection = HttpConnection, proxyAuth?: string) => {
+  const client = new TestClient({
+    connection,
+    node: `http${server instanceof HttpsServer ? 's' : ''}://${proxyAuth ? `${proxyAuth}@` : ''}${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
+    proxy: `http${proxy instanceof HttpsServer ? 's' : ''}://${proxyAuth ? `${proxyAuth}@` : ''}${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`,
+  })
+  const response = await client.request<TResponse>({ path, method: 'GET' })
+  await client.close()
+
+  return response
+}
+
+const mockResponse = (server: Server, t: Tap.Test) => {
   server.on('request', (req, res) => {
     t.equal(req.url, '/_cluster/health')
     res.setHeader('content-type', 'application/json')
     res.setHeader('x-elastic-product', 'Elasticsearch')
     res.end(JSON.stringify({ hello: 'world' }))
   })
+}
 
-  const client = new TestClient({
-    node: `http://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `http://${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
+test('http-http proxy support', async t => {
+  const server = await createServer()
+  const proxy = await createProxy()
+  mockResponse(server, t)
 
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health'), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection), { hello: 'world' })
 
   server.close()
   proxy.close()
@@ -59,20 +74,10 @@ test('http-http proxy support', async t => {
 test('http-https proxy support', async t => {
   const server = await createSecureServer()
   const proxy = await createProxy()
-  server.on('request', (req, res) => {
-    t.equal(req.url, '/_cluster/health')
-    res.setHeader('content-type', 'application/json')
-    res.setHeader('x-elastic-product', 'Elasticsearch')
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
+  mockResponse(server, t)
 
-  const client = new TestClient({
-    node: `https://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `http://${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
-
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health'), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection), { hello: 'world' })
 
   server.close()
   proxy.close()
@@ -81,20 +86,10 @@ test('http-https proxy support', async t => {
 test('https-http proxy support', async t => {
   const server = await createServer()
   const proxy = await createSecureProxy()
-  server.on('request', (req, res) => {
-    t.equal(req.url, '/_cluster/health')
-    res.setHeader('content-type', 'application/json')
-    res.setHeader('x-elastic-product', 'Elasticsearch')
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
+  mockResponse(server, t)
 
-  const client = new TestClient({
-    node: `http://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `https://${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
-
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health'), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection), { hello: 'world' })
 
   server.close()
   proxy.close()
@@ -103,20 +98,10 @@ test('https-http proxy support', async t => {
 test('https-https proxy support', async t => {
   const server = await createSecureServer()
   const proxy = await createSecureProxy()
-  server.on('request', (req, res) => {
-    t.equal(req.url, '/_cluster/health')
-    res.setHeader('content-type', 'application/json')
-    res.setHeader('x-elastic-product', 'Elasticsearch')
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
+  mockResponse(server, t)
 
-  const client = new TestClient({
-    node: `https://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `https://${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
-
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health'), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection), { hello: 'world' })
 
   server.close()
   proxy.close()
@@ -125,24 +110,14 @@ test('https-https proxy support', async t => {
 test('http basic authentication', async t => {
   const server = await createServer()
   const proxy = await createProxy()
-  server.on('request', (req, res) => {
-    t.equal(req.url, '/_cluster/health')
-    res.setHeader('content-type', 'application/json')
-    res.setHeader('x-elastic-product', 'Elasticsearch')
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
+  mockResponse(server, t)
 
   proxy.authenticate = function (req, fn): void {
     fn(null, req.headers['proxy-authorization'] === `Basic ${Buffer.from('hello:world').toString('base64')}`)
   }
 
-  const client = new TestClient({
-    node: `http://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `http://hello:world@${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
-
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same((await request(server, proxy, '/_cluster/health', HttpConnection, 'hello:world')), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection, 'hello:world'), { hello: 'world' })
 
   server.close()
   proxy.close()
@@ -151,24 +126,14 @@ test('http basic authentication', async t => {
 test('https basic authentication', async t => {
   const server = await createSecureServer()
   const proxy = await createProxy()
-  server.on('request', (req, res) => {
-    t.equal(req.url, '/_cluster/health')
-    res.setHeader('content-type', 'application/json')
-    res.setHeader('x-elastic-product', 'Elasticsearch')
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
+  mockResponse(server, t)
 
   proxy.authenticate = function (req, fn): void {
     fn(null, req.headers['proxy-authorization'] === `Basic ${Buffer.from('hello:world').toString('base64')}`)
   }
 
-  const client = new TestClient({
-    node: `https://${(server.address() as AddressInfo).address}:${(server.address() as AddressInfo).port}`,
-    proxy: `http://hello:world@${(proxy.address() as AddressInfo).address}:${(proxy.address() as AddressInfo).port}`
-  })
-
-  const response = await client.request({ path: '/_cluster/health', method: 'GET' })
-  t.same(response, { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', HttpConnection, 'hello:world'), { hello: 'world' })
+  t.same(await request(server, proxy, '/_cluster/health', UndiciConnection, 'hello:world'), { hello: 'world' })
 
   server.close()
   proxy.close()

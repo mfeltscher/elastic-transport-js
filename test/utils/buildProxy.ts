@@ -30,7 +30,7 @@ export const ssl = {
 }
 
 type AuthenticateFn = (err: Error | null, valid: boolean) => void
-interface ProxyServer extends http.Server {
+export interface ProxyServer extends http.Server {
   authenticate?(req: http.IncomingMessage, fn: AuthenticateFn): void
 }
 

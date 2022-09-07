@@ -865,19 +865,6 @@ test('Throw if detects http agent options', async t => {
   }
 })
 
-test('Throw if detects proxy option', async t => {
-  t.plan(1)
-
-  try {
-    new UndiciConnection({
-      url: new URL('http://localhost:9200'),
-      proxy: new URL('http://localhost:9201')
-    })
-  } catch (err: any) {
-    t.ok(err instanceof ConfigurationError)
-  }
-})
-
 test('Support mapbox vector tile', async t => {
   t.plan(1)
 

@@ -33,13 +33,8 @@ import BaseConnection, {
   ConnectionRequestResponseAsStream,
   getIssuerCertificate
 } from './BaseConnection'
-import { Pool, buildConnector, Dispatcher } from 'undici'
-import {
-  ConfigurationError,
-  RequestAbortedError,
-  ConnectionError,
-  TimeoutError
-} from '../errors'
+import { Pool, ProxyAgent, buildConnector, Dispatcher, setGlobalDispatcher } from 'undici'
+import { ConfigurationError, RequestAbortedError, ConnectionError, TimeoutError } from '../errors'
 import { UndiciAgentOptions } from '../types'
 import { kCaFingerprint, kEmitter } from '../symbols'
 
@@ -50,17 +45,23 @@ const MAX_STRING_LENGTH = buffer.constants.MAX_STRING_LENGTH
 
 export default class Connection extends BaseConnection {
   pool: Pool
+  proxyAgent: ProxyAgent | null = null;
   [kEmitter]: EventEmitter
 
   constructor (opts: ConnectionOptions) {
     super(opts)
 
     if (opts.proxy != null) {
-      throw new ConfigurationError('Undici connection can\'t work with proxies')
+      this.proxyAgent = new ProxyAgent(
+        typeof opts.proxy === 'string' ? opts.proxy : opts.proxy.href
+      )
+      setGlobalDispatcher(this.proxyAgent)
     }
 
     if (typeof opts.agent === 'function' || typeof opts.agent === 'boolean') {
-      throw new ConfigurationError('Undici connection agent options can\'t be a function or a boolean')
+      throw new ConfigurationError(
+        "Undici connection agent options can't be a function or a boolean"
+      )
     }
 
     if (opts.agent != null && !isUndiciAgentOptions(opts.agent)) {
@@ -100,7 +101,12 @@ export default class Connection extends BaseConnection {
             /* istanbul ignore else */
             if (caFingerprint !== issuerCertificate.fingerprint256) {
               socket.destroy()
-              return cb(new Error('Server certificate CA fingerprint does not match the value configured in caFingerprint'), null)
+              return cb(
+                new Error(
+                  'Server certificate CA fingerprint does not match the value configured in caFingerprint'
+                ),
+                null
+              )
             }
           }
           return cb(null, socket)
@@ -113,14 +119,22 @@ export default class Connection extends BaseConnection {
     this.pool = new Pool(this.url.toString(), undiciOptions)
   }
 
-  async request (params: ConnectionRequestParams, options: ConnectionRequestOptions): Promise<ConnectionRequestResponse>
-  async request (params: ConnectionRequestParams, options: ConnectionRequestOptionsAsStream): Promise<ConnectionRequestResponseAsStream>
+  async request (
+    params: ConnectionRequestParams,
+    options: ConnectionRequestOptions
+  ): Promise<ConnectionRequestResponse>;
+  async request (
+    params: ConnectionRequestParams,
+    options: ConnectionRequestOptionsAsStream
+  ): Promise<ConnectionRequestResponseAsStream>;
   async request (params: ConnectionRequestParams, options: any): Promise<any> {
     const maxResponseSize = options.maxResponseSize ?? MAX_STRING_LENGTH
     const maxCompressedResponseSize = options.maxCompressedResponseSize ?? MAX_BUFFER_LENGTH
     const requestParams = {
       method: params.method,
-      path: params.path + (params.querystring == null || params.querystring === '' ? '' : `?${params.querystring}`),
+      path:
+        params.path +
+        (params.querystring == null || params.querystring === '' ? '' : `?${params.querystring}`),
       headers: Object.assign({}, this.headers, params.headers),
       body: params.body,
       signal: options.signal ?? this[kEmitter]
@@ -163,11 +177,19 @@ export default class Connection extends BaseConnection {
       if (timeoutId != null) clearTimeout(timeoutId)
       switch (err.code) {
         case 'UND_ERR_ABORTED':
-          throw (timedout ? new TimeoutError('Request timed out') : new RequestAbortedError('Request aborted'))
+          throw timedout
+            ? new TimeoutError('Request timed out')
+            : new RequestAbortedError('Request aborted')
         case 'UND_ERR_HEADERS_TIMEOUT':
           throw new TimeoutError('Request timed out')
         case 'UND_ERR_SOCKET':
-          throw new ConnectionError(`${err.message} - Local: ${err.socket?.localAddress ?? 'unknown'}:${err.socket?.localPort ?? 'unknown'}, Remote: ${err.socket?.remoteAddress ?? 'unknown'}:${err.socket?.remotePort ?? 'unknown'}`) // eslint-disable-line
+          throw new ConnectionError(
+            `${err.message} - Local: ${err.socket?.localAddress ?? 'unknown'}:${
+              err.socket?.localPort ?? 'unknown'
+            }, Remote: ${err.socket?.remoteAddress ?? 'unknown'}:${
+              err.socket?.remotePort ?? 'unknown'
+            }`
+          )
         default:
           throw new ConnectionError(err.message)
       }
@@ -182,24 +204,32 @@ export default class Connection extends BaseConnection {
     }
 
     const contentEncoding = (response.headers['content-encoding'] ?? '').toLowerCase()
-    const isCompressed = contentEncoding.includes('gzip') || contentEncoding.includes('deflate') // eslint-disable-line
-    const isVectorTile = (response.headers['content-type'] ?? '').includes('application/vnd.mapbox-vector-tile')
+    const isCompressed = contentEncoding.includes('gzip') || contentEncoding.includes('deflate'); // eslint-disable-line
+    const isVectorTile = (response.headers['content-type'] ?? '').includes(
+      'application/vnd.mapbox-vector-tile'
+    )
 
     /* istanbul ignore else */
     if (response.headers['content-length'] !== undefined) {
       const contentLength = Number(response.headers['content-length'])
-      if (isCompressed && contentLength > maxCompressedResponseSize) { // eslint-disable-line
+      if (isCompressed && contentLength > maxCompressedResponseSize) {
+        // eslint-disable-line
         response.body.destroy()
-        throw new RequestAbortedError(`The content length (${contentLength}) is bigger than the maximum allowed buffer (${maxCompressedResponseSize})`)
+        throw new RequestAbortedError(
+          `The content length (${contentLength}) is bigger than the maximum allowed buffer (${maxCompressedResponseSize})`
+        )
       } else if (contentLength > maxResponseSize) {
         response.body.destroy()
-        throw new RequestAbortedError(`The content length (${contentLength}) is bigger than the maximum allowed string (${maxResponseSize})`)
+        throw new RequestAbortedError(
+          `The content length (${contentLength}) is bigger than the maximum allowed string (${maxResponseSize})`
+        )
       }
     }
 
     this.diagnostic.emit('deserialization', null, options)
     try {
-      if (isCompressed || isVectorTile) { // eslint-disable-line
+      if (isCompressed || isVectorTile) {
+        // eslint-disable-line
         return {
           statusCode: response.statusCode,
           headers: response.headers,
@@ -220,6 +250,9 @@ export default class Connection extends BaseConnection {
   async close (): Promise<void> {
     debug('Closing connection', this.id)
     await this.pool.close()
+    if (this.proxyAgent != null) {
+      await this.proxyAgent.close()
+    }
   }
 }
 
@@ -230,10 +263,12 @@ function isUndiciAgentOptions (opts: Record<string, any>): opts is UndiciAgentOp
   if (opts.maxSockets != null) return false
   if (opts.maxFreeSockets != null) return false
   if (opts.scheduling != null) return false
-  if (opts.proxy != null) return false
   return true
 }
 
-function isTlsSocket (opts: buildConnector.Options, socket: Socket | TLSSocket | null): socket is TLSSocket {
+function isTlsSocket (
+  opts: buildConnector.Options,
+  socket: Socket | TLSSocket | null
+): socket is TLSSocket {
   return socket !== null && opts.protocol === 'https:'
 }

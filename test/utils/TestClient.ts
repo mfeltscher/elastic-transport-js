@@ -74,7 +74,7 @@ export default class TestClient {
   serializer: Serializer
   constructor (opts: any) {
     const options = Object.assign({}, {
-      Connection: HttpConnection,
+      Connection: opts.connection || HttpConnection,
       Transport: SniffingTransport,
       Serializer,
       ConnectionPool: opts.cloud ? CloudConnectionPool : ClusterConnectionPool,
